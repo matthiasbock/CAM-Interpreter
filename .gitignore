@@ -1,0 +1,9 @@
+*~
+.*.swp
+Thumbs.db
+
+.settings/
+.project
+.cproject
+
+interpreter

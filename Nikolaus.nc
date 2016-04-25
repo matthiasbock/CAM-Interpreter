@@ -28,3 +28,6 @@ N080 X-6000
 
 % diagonal nach rechts unten
 N090 X6000 Y6000
+
+% Ende
+N100 M30

@@ -1,3 +1,11 @@
+/*
+ * NC-Interpreter von
+ * Matthias Bock und Nicole Loewel
+ *
+ * 25. April 2016
+ *
+ * Lizenz: GNU GPLv3
+ */
 
 #include <stdio.h>
 #include <stdlib.h>

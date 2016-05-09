@@ -12,29 +12,18 @@
 #include <stdbool.h>
 #include <string.h>
 
-#define MODE_INTERPOLATION_QUICK   0
-#define MODE_INTERPOLATION_LINEAR  1
+#include "point.h"
+#include "interpolator.h"
+
 #define MODE_COORDINATE_ABSOLUTE   2
 #define MODE_COORDINATE_RELATIVE   3
-
-typedef struct
-{
-    double x;
-    double y;
-} point_t;
 
 int mode_interpolation = MODE_INTERPOLATION_QUICK;
 int mode_coordinate    = MODE_COORDINATE_ABSOLUTE;
 point_t current_position = {x:0.0, y:0.0};
 int speed = 100;
 
-void interpolate(point_t *start, point_t *stop)
-{
-    // stub
-    printf("Go!\n");
-}
-
-void interpret_block(char block[], point_t* target, bool* move)
+void interpret_command(char block[], point_t* target, bool* move)
 {
     if (block[0] == 'N')
         return;
@@ -136,14 +125,14 @@ void interpret_line(char line[])
     // jeden Teilblock verarbeiten
     while (p != NULL)
     {
-        interpret_block(p, &target, &move);
+        interpret_command(p, &target, &move);
         p = strtok(NULL, " ");
     }
 
     if (move)
     {
         // Interpolator aufrufen
-        interpolate(&current_position, &target);
+        interpolate(&current_position, &target, mode_interpolation);
     }
 }
 

@@ -6,9 +6,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
-//#include <dos.h>
+#include <dos.h>
 #include <math.h>
+#include <time.h>
+
+#define bool int
+#define true 1
+#define false 0
 
 int    es_tsr;
 union  REGS regs;        /* Register */
@@ -24,27 +28,26 @@ long far *ZSOLL;
 
 typedef struct
 {
-    double x;
-    double y;
+	float x;
+	float y;
 } point_t;
 
 #define pulses_per_10_um 400
 
-#define v_Bahn  2.0   // Maximalgeschwindigkeit in mm/s
+#define v_Bahn  5.0  // Maximalgeschwindigkeit in mm/s
 #define a      10.0   // Beschleunigung in mm/s^2
 #define T       0.004 // Interpolationstakt in ms
 
 int debug;
 
-#define MODE_INTERPOLATION_QUICK   0
-#define MODE_INTERPOLATION_LINEAR  1
 #define MODE_COORDINATE_ABSOLUTE   2
 #define MODE_COORDINATE_RELATIVE   3
+#define MODE_INTERPOLATION_QUICK   0
+#define MODE_INTERPOLATION_LINEAR  1
 
 int mode_interpolation = MODE_INTERPOLATION_QUICK;
 int mode_coordinate    = MODE_COORDINATE_ABSOLUTE;
-point_t current_position;
-current_position = {x:0.0f, y:0.0f};
+point_t current_position = {0.0, 0.0};
 int speed = 100;
 
 // Übergabe der Teilsollwerte an den Lageregler:
@@ -72,6 +75,10 @@ float distance(point_t *P0, point_t *P1)
 
 void interpolate_ramp(point_t *P0, point_t *P1)
 {
+	 float S_Gesamt,S_k, S_Rest,S_Brems, v_k, tau, dtau;
+	 point_t  p_k;
+	 point_t* P_k;
+	 float old_x, old_y;
     /*
     ------------------------------------------------------------------
     Segment des TSR-Programms bestimmen
@@ -92,21 +99,19 @@ void interpolate_ramp(point_t *P0, point_t *P1)
     ZSOLL   = (long far*) MK_FP(es_tsr,ADR_ZSOLL);    
     
     // Laenge der insgesamt zu verfahrenden Strecke
-    float S_Gesamt = distance(P0, P1);
+	 S_Gesamt = distance(P0, P1);
 
     // wie weit man schon auf der Gesamtstrecke verfahren ist
-    point_t  p_k  = {x:P0->x, y:P0->y};
-    point_t* P_k  = &p_k;
-    float S_k     = 0.0;
+	 p_k.x  = P0->x;
+	 p_k.y  = P0->y;
+	 P_k  = &p_k;
+	 S_k     = 0.0;
 
-    float S_Rest  = S_Gesamt;
-    float S_Brems;
+    S_Rest  = S_Gesamt;
 
-    float v_k     = 0.0;
+    v_k     = 0.0;
 
     // Prozentsatz, wie weit man schon auf der Gesamtstrecke verfahren ist
-    float tau;
-    float dtau;
 
     while (S_Rest > 0.0)
     {
@@ -129,8 +134,8 @@ void interpolate_ramp(point_t *P0, point_t *P1)
         tau   += dtau;
 
         // der naechste Zwischenpunkt wird berechnet:
-        float old_x = P_k->x;
-        float old_y = P_k->y;
+		old_x = P_k->x;
+		old_y = P_k->y;
 
         if (tau > 1.0 || S_Rest <= 0.0)
         {
@@ -147,7 +152,7 @@ void interpolate_ramp(point_t *P0, point_t *P1)
         }
 
         set_position(P_k);
-        //printf("moved\t\t\t\t\t\t\t (%.2f,%.2f), v_k = %.2f\n", P_k->x-old_x, P_k->y-old_y, v_k);
+//		printf("x=%.2f, y=%.2f, dx=%.2f, dy=%.2f, v_k = %.2f\n", P_k->x, P_k->y, P_k->x-old_x, P_k->y-old_y, v_k);
     }
 }
 
@@ -242,6 +247,9 @@ void interpret_command(char block[], point_t* target, bool* move)
 
 void interpret_line(char line[])
 {
+	 point_t target;
+    bool move;
+	 char* p;
     // leere Zeile
     if (strlen(line) < 3 || line[0] == ' ' || line[0] == '\t')
         return;
@@ -258,25 +266,63 @@ void interpret_line(char line[])
     }
 
     // dahin wollen wir in dieser Zeile verfahren:
-    point_t target = {x: 0.0, y:0.0};
+	 target.x = 0.0;
+	 target.y = 0.0;
     // verfahren wir in dieser Zeile ueberhaupt?
-    bool move = false;
+    move = false;
 
     // Zeile auftrennen mit Leertaste als Zwischenraum
-    char *p = strtok(line, " ");
+	 p = strtok(line, " ");
 
     // jeden Teilblock verarbeiten
     while (p != NULL)
-    {
-        interpret_command(p, &target, &move);
-        p = strtok(NULL, " ");
-    }
+	{
+		printf("Interpretiere %s...\n", (char*) p);
+		interpret_command(p, &target, &move);
+		p = strtok(NULL, " ");
+	}
 
     if (move)
-    {
+	{
+		printf("Interpoliere...\n");
         // Interpolator aufrufen
         interpolate(&current_position, &target, mode_interpolation);
     }
+}
+
+int getline(char **lineptr, FILE *stream)
+{
+    char *bufptr = NULL;
+    char *p = bufptr;
+    size_t size;
+    int c;
+
+	bufptr = *lineptr;
+
+    c = fgetc(stream);
+	if (c == EOF)
+	{
+		return -1;
+	}
+
+	bufptr = malloc(128);
+   memset(bufptr, 0, 128);
+	p = bufptr;
+
+	while(c != EOF)
+	{
+		if (c == '\n')
+		{
+    		break;
+		}
+		*p++ = c;
+    	c = fgetc(stream);
+    }
+
+    *p++ = '\0';
+    *lineptr = bufptr;
+
+    return p - bufptr - 1;
 }
 
 int main()
@@ -284,23 +330,27 @@ int main()
     FILE * fp;
     char * line = NULL;
     size_t len = 0;
-    ssize_t read;
+	size_t read;
+	char*  filename = "NIK.NC";
 
     // Datei oeffnen
-    fp = fopen("Nikolaus.nc", "r");
-    if (fp == NULL)
-    {
-        printf("Fatal: Datei konnte nicht geoeffnet werden\n");
+	fp = fopen(filename, "r");
+	if (fp == NULL)
+	{
+		printf("Fatal: Datei %s konnte nicht geoeffnet werden\n", filename);
         return -1;
     }
 
     // Datei Zeile fuer Zeile verarbeiten
-    while ((read = getline(&line, &len, fp)) != -1)
+	while ((read = getline(&line, fp)) != -1)
     {
 //        while (strlen(line) >0 && (line[strlen(line)-1] == 0x0D || line[strlen(line)-1]))
 //            line[strlen(line)-1] = 0;
-        //printf("%s", line);
-        interpret_line(line);
+
+		printf("Kommando: %s\n", line);
+//		sleep(1);
+
+      interpret_line(line);
     }
 
     // Datei schliessen

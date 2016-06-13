@@ -6,9 +6,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <dos.h>
 #include <math.h>
-#include <time.h>
 
 #define bool int
 #define true 1
@@ -28,14 +28,14 @@ long far *ZSOLL;
 
 typedef struct
 {
-	float x;
-	float y;
+    double x;
+    double y;
 } point_t;
 
 #define pulses_per_10_um 400
 
-#define v_Bahn  5.0  // Maximalgeschwindigkeit in mm/s
-#define a      10.0   // Beschleunigung in mm/s^2
+#define v_Bahn  10.0  // Maximalgeschwindigkeit in mm/s
+#define a       20.0   // Beschleunigung in mm/s^2
 #define T       0.004 // Interpolationstakt in ms
 
 int debug;
@@ -44,8 +44,9 @@ int debug;
 #define MODE_COORDINATE_RELATIVE   3
 #define MODE_INTERPOLATION_QUICK   0
 #define MODE_INTERPOLATION_LINEAR  1
+#define MODE_INTERPOLATION_RAMP    2
 
-int mode_interpolation = MODE_INTERPOLATION_QUICK;
+int mode_interpolation = MODE_INTERPOLATION_RAMP;
 int mode_coordinate    = MODE_COORDINATE_ABSOLUTE;
 point_t current_position = {0.0, 0.0};
 int speed = 100;
@@ -79,6 +80,7 @@ void interpolate_ramp(point_t *P0, point_t *P1)
 	 point_t  p_k;
 	 point_t* P_k;
 	 float old_x, old_y;
+
     /*
     ------------------------------------------------------------------
     Segment des TSR-Programms bestimmen
@@ -109,7 +111,8 @@ void interpolate_ramp(point_t *P0, point_t *P1)
 
     S_Rest  = S_Gesamt;
 
-    v_k     = 0.0;
+	v_k     = 0.0;
+	tau = 0.0;
 
     // Prozentsatz, wie weit man schon auf der Gesamtstrecke verfahren ist
 
@@ -123,24 +126,32 @@ void interpolate_ramp(point_t *P0, point_t *P1)
             // Endpunkt erreicht
             return;
 
-        if (S_Brems < S_Rest && v_k < v_Bahn)
-            // beschleunigen
-            v_k = v_k + a*T;
-        else
-            // bremsen
-            v_k = v_k - a*T;
+		if (S_Brems < S_Rest && v_k < v_Bahn)
+		{
+			// beschleunigen
+			v_k = v_k + a*T;
+			printf("beschleunigen\n");
+		}
+		else
+		{
+			// bremsen
+			v_k = v_k - a*T;
+			printf("bremsen\n");
+		}
 
         dtau   = v_k*T/S_Gesamt;
         tau   += dtau;
 
         // der naechste Zwischenpunkt wird berechnet:
-		old_x = P_k->x;
-		old_y = P_k->y;
+        old_x = P_k->x;
+        old_y = P_k->y;
 
-        if (tau > 1.0 || S_Rest <= 0.0)
-        {
-            tau = 1.0;
-            P_k->x = P1->x;
+		if (tau >= 1.0 || S_Rest <= 0.0)
+		{
+			tau = 1.0;
+			S_Rest = 0.0;
+
+			P_k->x = P1->x;
             P_k->y = P1->y;
         }
         else
@@ -152,14 +163,17 @@ void interpolate_ramp(point_t *P0, point_t *P1)
         }
 
         set_position(P_k);
-//		printf("x=%.2f, y=%.2f, dx=%.2f, dy=%.2f, v_k = %.2f\n", P_k->x, P_k->y, P_k->x-old_x, P_k->y-old_y, v_k);
-    }
+		  printf("tau=%.2f, delta: x=%.2f, y=%.2f, v_k = %.2f\n", tau, P_k->x-old_x, P_k->y-old_y, v_k);
+	  }
 }
 
 void interpolate(point_t *P0, point_t *P1, int mode)
 {
-    // if mode == RAMP
-    interpolate_ramp(P0, P1);
+//    if (mode == MODE_INTERPOLATION_RAMP)
+		  interpolate_ramp(P0, P1);
+
+//	else
+//        printf("Interpolations-Modus wird nicht unterstuetzt.\n");
 }
 
 /*
@@ -171,10 +185,33 @@ void interpolate(point_t *P0, point_t *P1, int mode)
  * Lizenz: GNU GPLv3
  */
 
-void interpret_command(char block[], point_t* target, bool* move)
+void interpret_command(char input_str[], point_t* target, bool* move)
 {
-    if (block[0] == 'N')
-        return;
+
+	char block[30];
+	block[0] = 0;
+
+//	printf("input_str = %s\n", input_str);
+//	printf("block = %s\n", block);
+	strcpy(block, input_str);
+
+	if (block[4] == 10 || block[4] == 13)
+	{
+		block[4] = 0;
+	}
+
+//	block[0] = input_str[0];
+//	block[1] = input_str[1];
+//	block[2] = input_str[2];
+//	block[3] = 0;
+//	printf("input_str = %s\n", input_str);
+//	printf("block = %s\n", block);
+
+	if (block[0] == 'N')
+	{
+		printf("Das ist ein Kommentar.\n");
+		  return;
+	}
 
     else if (block[0] == 'G')
     {
@@ -183,24 +220,24 @@ void interpret_command(char block[], point_t* target, bool* move)
             printf("Syntaxfehler: G-Kommando muss aus genau 3 Zeichen bestehen\n");
             return;
         }
-        block[4] = 0;
+        
 
-        if (strcmp(block, "G00"))
+        if (strcmp(block, "G00") != 0)
         {
             mode_interpolation = MODE_INTERPOLATION_QUICK;
             printf("Eilgang: OK\n");
         }
-        else if (strcmp(block, "G01"))
+        else if (strcmp(block, "G01") != 0)
         {
             mode_interpolation = MODE_INTERPOLATION_LINEAR;
             printf("Linearinterpolation: OK\n");
         }
-        else if (strcmp(block, "G90"))
+        else if (strcmp(block, "G90") != 0)
         {
             mode_coordinate = MODE_COORDINATE_ABSOLUTE;
             printf("Koordinaten: absolut\n");
         }
-        else if (strcmp(block, "G91"))
+        else if (strcmp(block, "G91") != 0)
         {
             mode_coordinate = MODE_COORDINATE_RELATIVE;
             printf("Koordinaten: relativ\n");
@@ -209,7 +246,7 @@ void interpret_command(char block[], point_t* target, bool* move)
         {
             printf("G-Kommando nicht erkannt: %s\n", block);
         }
-    }
+	 }
 
     else if (block[0] == 'X')
     {
@@ -233,7 +270,7 @@ void interpret_command(char block[], point_t* target, bool* move)
 
     else if (block[0] == 'M')
     {
-        block[4] = 0;
+        block[4] = '\0';
 //        if (!strcmp(block, "M30"))
 //            printf("Ich nehme an, sie meinten \"M30\": %s\n", block);
         printf("Programmende\n");
@@ -262,65 +299,83 @@ void interpret_line(char line[])
     if (line[0] != 'N')
     {
         printf("Syntaxfehler: 'N' am Zeilenanfang erwartet: %s\n", line);
-        return;
+        return;       
     }
 
     // dahin wollen wir in dieser Zeile verfahren:
 	 target.x = 0.0;
 	 target.y = 0.0;
-    // verfahren wir in dieser Zeile ueberhaupt?
+
+    // sollen wir nach dieser Zeile verfahren?
     move = false;
 
-    // Zeile auftrennen mit Leertaste als Zwischenraum
+    // Zeile auftrennen mit Leertaste als Zwischenraum/Trennzeichen
 	 p = strtok(line, " ");
 
     // jeden Teilblock verarbeiten
     while (p != NULL)
-	{
-		printf("Interpretiere %s...\n", (char*) p);
-		interpret_command(p, &target, &move);
-		p = strtok(NULL, " ");
-	}
+	 {
+	   printf("Interpretiere Teil-String %s...\n", (char*)p);
+	   interpret_command(p, &target, &move);
+	   p = strtok(NULL, " ");
+    }
 
     if (move)
-	{
-		printf("Interpoliere...\n");
+    {
         // Interpolator aufrufen
         interpolate(&current_position, &target, mode_interpolation);
-    }
+	 }
+	 else printf("haha move ist false, passiert ja gar nichts hier\n");
 }
 
-int getline(char **lineptr, FILE *stream)
-{
+size_t getline(char **lineptr, size_t *n, FILE *stream) {
     char *bufptr = NULL;
     char *p = bufptr;
     size_t size;
     int c;
 
-	bufptr = *lineptr;
+    if (lineptr == NULL) {
+    	return -1;
+    }
+    if (stream == NULL) {
+    	return -1;
+    }
+    if (n == NULL) {
+    	return -1;
+    }
+    bufptr = *lineptr;
+    size = *n;
 
     c = fgetc(stream);
-	if (c == EOF)
-	{
-		return -1;
-	}
-
-	bufptr = malloc(128);
-   memset(bufptr, 0, 128);
-	p = bufptr;
-
-	while(c != EOF)
-	{
-		if (c == '\n')
-		{
+    if (c == EOF) {
+    	return -1;
+    }
+    if (bufptr == NULL) {
+    	bufptr = malloc(128);
+    	if (bufptr == NULL) {
+    		return -1;
+    	}
+    	size = 128;
+    }
+    p = bufptr;
+    while(c != EOF) {
+    	if ((p - bufptr) > (size - 1)) {
+    		size = size + 128;
+    		bufptr = realloc(bufptr, size);
+    		if (bufptr == NULL) {
+    			return -1;
+    		}
+    	}
+    	*p++ = c;
+    	if (c == '\n') {
     		break;
-		}
-		*p++ = c;
+    	}
     	c = fgetc(stream);
     }
 
     *p++ = '\0';
     *lineptr = bufptr;
+    *n = size;
 
     return p - bufptr - 1;
 }
@@ -330,27 +385,23 @@ int main()
     FILE * fp;
     char * line = NULL;
     size_t len = 0;
-	size_t read;
-	char*  filename = "NIK.NC";
+    size_t read;
 
     // Datei oeffnen
-	fp = fopen(filename, "r");
-	if (fp == NULL)
-	{
-		printf("Fatal: Datei %s konnte nicht geoeffnet werden\n", filename);
+	fp = fopen("Nik.nc", "r");
+    if (fp == NULL)
+    {
+        printf("Fatal: Datei konnte nicht geoeffnet werden\n");
         return -1;
     }
 
     // Datei Zeile fuer Zeile verarbeiten
-	while ((read = getline(&line, fp)) != -1)
+    while ((read = getline(&line, &len, fp)) != -1)
     {
 //        while (strlen(line) >0 && (line[strlen(line)-1] == 0x0D || line[strlen(line)-1]))
 //            line[strlen(line)-1] = 0;
-
-		printf("Kommando: %s\n", line);
-//		sleep(1);
-
-      interpret_line(line);
+        //printf("%s", line);
+        interpret_line(line);
     }
 
     // Datei schliessen

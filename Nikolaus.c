@@ -9,6 +9,7 @@
 #include <ctype.h>
 #include <dos.h>
 #include <math.h>
+#include <time.h>
 
 #define bool int
 #define true 1
@@ -34,7 +35,7 @@ typedef struct
 
 #define pulses_per_10_um 400
 
-#define v_Bahn  10.0  // Maximalgeschwindigkeit in mm/s
+#define v_Bahn  16.0  // Maximalgeschwindigkeit in mm/s
 #define a       20.0   // Beschleunigung in mm/s^2
 #define T       0.004 // Interpolationstakt in ms
 
@@ -54,11 +55,17 @@ int speed = 100;
 // Übergabe der Teilsollwerte an den Lageregler:
 void set_position(point_t* P)
 {
-    while (*TE_GLT == 1);       /* warten bis neuer Wert an die
-                                   Lagereglung uebergeben werden kann */
+//	printf("\n");
+	while (*TE_GLT == 1)
+	{
+//		printf(".");
+	}       					/* warten bis neuer Wert an die
+								   Lagereglung uebergeben werden kann */
+//	printf(";\n");
+
     *TESOWE = P->x * pulses_per_10_um;       /* Pulse fuer X-Achse */
     *(TESOWE + 1) = P->y * pulses_per_10_um; /* Pulse fuer y-Achse */
-    *TE_GLT = 1;                /* Uebergabe ist gueltig */
+	*TE_GLT = 1;                			/* Uebergabe ist gueltig */
 }
 
 
@@ -80,6 +87,8 @@ void interpolate_ramp(point_t *P0, point_t *P1)
 	 point_t  p_k;
 	 point_t* P_k;
 	 float old_x, old_y;
+	 int printf_counter = 0;
+	 int i;
 
     /*
     ------------------------------------------------------------------
@@ -130,13 +139,13 @@ void interpolate_ramp(point_t *P0, point_t *P1)
 		{
 			// beschleunigen
 			v_k = v_k + a*T;
-			printf("beschleunigen\n");
+//			printf("beschleunigen\n");
 		}
 		else
 		{
 			// bremsen
 			v_k = v_k - a*T;
-			printf("bremsen\n");
+//			printf("bremsen\n");
 		}
 
         dtau   = v_k*T/S_Gesamt;
@@ -151,19 +160,25 @@ void interpolate_ramp(point_t *P0, point_t *P1)
 			tau = 1.0;
 			S_Rest = 0.0;
 
+			// weiter gehts nicht
 			P_k->x = P1->x;
             P_k->y = P1->y;
         }
         else
         {
-            //P_k->x += (P1->x - P0->x) * dtau;
-            //P_k->y += (P1->y - P0->y) * dtau;
-            P_k->x = P0->x + tau*(P1->x - P0->x);
-            P_k->y = P0->y + tau*(P1->y - P0->y);
-        }
+			P_k->x = P0->x + tau*(P1->x - P0->x);
+			P_k->y = P0->y + tau*(P1->y - P0->y);
+		}
 
-        set_position(P_k);
-		  printf("tau=%.2f, delta: x=%.2f, y=%.2f, v_k = %.2f\n", tau, P_k->x-old_x, P_k->y-old_y, v_k);
+		set_position(P_k);
+		for (i=0; i<10000; i++)
+			asm{ nop; };
+//		sleep(10);
+
+		// nur jedes zehnte mal ausgeben
+		printf_counter = (printf_counter+1) % 10;
+		if (printf_counter == 0)
+		  printf("Prozent verfahren: %02f, x=%06f, y=%06f, v_k = %02f\n", tau*100, P_k->x, P_k->y, v_k);
 	  }
 }
 
@@ -188,6 +203,7 @@ void interpolate(point_t *P0, point_t *P1, int mode)
 void interpret_command(char input_str[], point_t* target, bool* move)
 {
 
+	point_t P;
 	char block[30];
 	block[0] = 0;
 
@@ -273,6 +289,9 @@ void interpret_command(char input_str[], point_t* target, bool* move)
         block[4] = '\0';
 //        if (!strcmp(block, "M30"))
 //            printf("Ich nehme an, sie meinten \"M30\": %s\n", block);
+		P.x = 0;
+		P.y = 0;
+		set_position(&P);
         printf("Programmende\n");
     }
 
@@ -287,6 +306,8 @@ void interpret_line(char line[])
 	 point_t target;
     bool move;
 	 char* p;
+	 int i;
+
     // leere Zeile
     if (strlen(line) < 3 || line[0] == ' ' || line[0] == '\t')
         return;
@@ -323,9 +344,12 @@ void interpret_line(char line[])
     if (move)
     {
         // Interpolator aufrufen
-        interpolate(&current_position, &target, mode_interpolation);
+		interpolate(&current_position, &target, mode_interpolation);
+		for (i=0; i<10000; i++)
+			asm{ nop; };
+//		sleep(500);
 	 }
-	 else printf("haha move ist false, passiert ja gar nichts hier\n");
+	 else printf("haha, move ist false, passiert ja gar nichts hier\n");
 }
 
 size_t getline(char **lineptr, size_t *n, FILE *stream) {

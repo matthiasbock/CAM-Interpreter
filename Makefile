@@ -2,11 +2,14 @@
 CC = gcc
 LD = ld
 
-CFLAGS  += -Wall -g -lgcc -lm
+CFLAGS  += -Wall -g -lgcc -lm -ansi
 
-all: interpreter.elf
+all: nikolaus.elf
 
 interpreter.elf: interpreter.o interpolator.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+nikolaus.elf:
 	$(CC) $(CFLAGS) $^ -o $@
 	
 %.o: %.c %s

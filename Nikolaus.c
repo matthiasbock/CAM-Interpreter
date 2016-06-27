@@ -489,6 +489,9 @@ int main()
     size_t len = 0;
     size_t read;
 
+    // initialisiere das Interface zum Lageregler
+    init_tsr();
+
     // Datei oeffnen
     fp = fopen("Nik.nc", "r");
     if (fp == NULL)

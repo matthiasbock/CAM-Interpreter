@@ -1,6 +1,12 @@
 /**
- * Lageregler über Pointer ansprechen
- * TSR-Programm (Terminate and Stay Ready)
+ * CAM Steuersoftware
+ *
+ * Liest Steuerkommandos aus einer NC-Datei
+ * und verfaehrt die Wambach-Maschine entsprechend
+ *
+ * Hinweise:
+ *  - Vor dem Start muss nctsr durch einfachen Aufruf geladen werden.
+ *  - Dieses Programm laeuft nur unter MS-DOS.
  */
 
 #include <stdio.h>
@@ -14,6 +20,11 @@
 #define bool int
 #define true 1
 #define false 0
+
+/**
+ * Lageregler über Pointer ansprechen
+ * TSR-Programm (Terminate and Stay Ready)
+ */
 
 int    es_tsr;
 union  REGS regs;        /* Register */
@@ -35,9 +46,9 @@ typedef struct
 
 #define pulses_per_10_um 400
 
-#define v_Bahn  16.0  // Maximalgeschwindigkeit in mm/s
+#define v_Bahn  16.0   // Maximalgeschwindigkeit in mm/s
 #define a       20.0   // Beschleunigung in mm/s^2
-#define T       0.004 // Interpolationstakt in ms
+#define T       0.004  // Interpolationstakt in ms
 
 int debug;
 
@@ -52,44 +63,34 @@ int mode_coordinate    = MODE_COORDINATE_ABSOLUTE;
 point_t current_position = {0.0, 0.0};
 int speed = 100;
 
-// Übergabe der Teilsollwerte an den Lageregler:
+/**
+ * Uebergibt die Teilsollwerte an den Lageregler
+ */
 void set_position(point_t* P)
 {
-//	printf("\n");
-	while (*TE_GLT == 1)
-	{
-//		printf(".");
-	}       					/* warten bis neuer Wert an die
-								   Lagereglung uebergeben werden kann */
-//	printf(";\n");
+//    printf("\n");
+    while (*TE_GLT == 1)
+    {
+//        printf(".");
+    }                           /* warten bis neuer Wert an die
+                                   Lagereglung uebergeben werden kann */
+//    printf(";\n");
 
-    *TESOWE = P->x * pulses_per_10_um;       /* Pulse fuer X-Achse */
-    *(TESOWE + 1) = P->y * pulses_per_10_um; /* Pulse fuer y-Achse */
-	*TE_GLT = 1;                			/* Uebergabe ist gueltig */
+    /* Pulse fuer X-Achse */
+    *TESOWE = (int) (P->x * pulses_per_10_um);
+    
+    /* Pulse fuer y-Achse */
+    *(TESOWE + 1) = (int) (P->y * pulses_per_10_um);
+    
+    /* Uebergabe ist gueltig */
+    *TE_GLT = 1;
 }
-
-
 
 /**
- * Dieses Programm zerlegt eine gegebene Strecke
- * zwischen einem Anfangspunkt P0 und einem Endpunkt P1
- * in Teilpunkte, zwischen denen jeweils dieselbe Zeit vergeht
+ * Laderegelung initialisieren
  */
-
-float distance(point_t *P0, point_t *P1)
+void init_tsr()
 {
-    return sqrt(pow((P1->x - P0->x),2) + pow((P1->y - P0->y),2));
-}
-
-void interpolate_ramp(point_t *P0, point_t *P1)
-{
-	 float S_Gesamt,S_k, S_Rest,S_Brems, v_k, tau, dtau;
-	 point_t  p_k;
-	 point_t* P_k;
-	 float old_x, old_y;
-	 int printf_counter = 0;
-	 int i;
-
     /*
     ------------------------------------------------------------------
     Segment des TSR-Programms bestimmen
@@ -99,7 +100,7 @@ void interpolate_ramp(point_t *P0, point_t *P1)
     regs.h.al = 0x1c;                       /* Codesegment von Interrupt 1CH bestimmen */
     int86x(0x21 , &regs , &regs , &sregs);  /* Beginn des CS holen */
     es_tsr = sregs.es;                      /* Zeigt auf CS des Lagereglers */
-    
+
     /*
     ------------------------------------------------------------------
     Pointer für das TSR-Programm adressieren
@@ -107,127 +108,190 @@ void interpolate_ramp(point_t *P0, point_t *P1)
     */
     TE_GLT  = (char far*) MK_FP(es_tsr,ADR_TE_GLT);
     TESOWE  = (int far*)  MK_FP(es_tsr,ADR_TESOWE);
-    ZSOLL   = (long far*) MK_FP(es_tsr,ADR_ZSOLL);    
+    ZSOLL   = (long far*) MK_FP(es_tsr,ADR_ZSOLL);
+}
+
+/**
+ * Dieses Programm zerlegt eine gegebene Strecke
+ * zwischen einem Anfangspunkt P0 und einem Endpunkt P1
+ * in Teilpunkte, zwischen denen jeweils dieselbe Zeit vergeht
+ */
+float distance(point_t *P0, point_t *P1)
+{
+    return sqrt(pow((P1->x - P0->x),2) + pow((P1->y - P0->y),2));
+}
+
+/**
+ * Interpoliert zwischen zwei gegebenen Punkten
+ * und verfaehrt die Achsen entsprechend
+ * Das Geschwindigkeitsprofil ist eine Rampe:
+ *  - zu Beginn beschleunigt der Roboter
+ *  - in der Mitte verfaehrt der Roboter mit konstanter Bahngeschwindigkeit
+ *  - gegen Ende bremst der Roboter
+ */
+void interpolate_ramp(point_t *P0, point_t *P1)
+{
+     float S_Gesamt,S_k, S_Rest,S_Brems, v_k, tau, dtau;
+     point_t  p_k;
+     point_t* P_k;
+     point_t  Verfahrvektor;
+     float old_x, old_y;
+     int printf_counter = 0;
+     int i;
     
     // Laenge der insgesamt zu verfahrenden Strecke
-	 S_Gesamt = distance(P0, P1);
+    printf("Verfahre von (%02f|%02f) nach (%02f|%02f)...\n", P0->x, P0->y, P1->x, P1->y);
+
+    S_Gesamt = distance(P0, P1);
+    printf("Laenge der insgesamt zu verfahrenden Strecke: %03f\n", S_Gesamt);
 
     // wie weit man schon auf der Gesamtstrecke verfahren ist
-	 p_k.x  = P0->x;
-	 p_k.y  = P0->y;
-	 P_k  = &p_k;
-	 S_k     = 0.0;
+    S_k    = 0.0;
+    P_k    = &p_k;
+    P_k->x = P0->x;
+    P_k->y = P0->y;
 
     S_Rest  = S_Gesamt;
 
-	v_k     = 0.0;
-	tau = 0.0;
+    // Laenge der Rest-Strecke, ab der gebremst werden muss,
+    // um am Ende mit Geschwindigkeit Null anzukommen
+    S_Brems = pow(v_Bahn,2) / (2*a);
+    printf("Verfahre mit Rampe; Beschleunigungs-/Bremsweg: %06f (%01f\045)\n", S_Brems, S_Brems/S_Gesamt);
+
+    // Startgeschwindigkeit: Null
+    v_k = 0.0;
 
     // Prozentsatz, wie weit man schon auf der Gesamtstrecke verfahren ist
+    tau = 0.0;
 
+    Verfahrvektor.x = 0;
+    Verfahrvektor.y = 0;
+    printf("Fortschritt/%: %02f (+%02f); Verfahrvektor: (%06f|%06f); v_k = %02f;\n", tau*100, dtau*100, Verfahrvektor.x, Verfahrvektor.y, v_k);
+
+    // solange wir nicht am Ziel angekommen sind:
     while (S_Rest > 0.0)
     {
+        // nur jedes zehnte mal ausgeben
+        printf_counter = (printf_counter+1) % 10;
+
         S_k     = distance(P_k, P0);
         S_Rest  = S_Gesamt - S_k;
-        S_Brems = pow(v_k,2) / (2*a);
 
         if (S_Rest <= 0.0)
+        {
             // Endpunkt erreicht
             return;
+        }
 
-		if (S_Brems < S_Rest && v_k < v_Bahn)
-		{
-			// beschleunigen
-			v_k = v_k + a*T;
-//			printf("beschleunigen\n");
-		}
-		else
-		{
-			// bremsen
-			v_k = v_k - a*T;
-//			printf("bremsen\n");
-		}
+        if (v_k < v_Bahn && S_Rest > S_Brems)
+        {
+            // beschleunigen
+            v_k = v_k + a*T;
+            if (!printf_counter)
+            printf("Bahngeschwindigkeit unterschritten => beschleunigen\n");
+        }
+        else if (S_Rest <= S_Brems)
+        {
+            // bremsen
+            v_k = v_k - a*T;
+            if (!printf_counter)
+                printf("Bremsweg unterschritten => bremsen\n");
+        }
+        else
+        {
+            v_k = v_Bahn;
+            if (!printf_counter)
+                printf("konstante Bahngeschwindigkeit\n");
+        }
 
         dtau   = v_k*T/S_Gesamt;
         tau   += dtau;
 
-        // der naechste Zwischenpunkt wird berechnet:
+        /*
+         * der naechste Zwischenpunkt wird berechnet
+         */
+         
+        // alten Punkt merken
         old_x = P_k->x;
         old_y = P_k->y;
 
-		if (tau >= 1.0 || S_Rest <= 0.0)
-		{
-			tau = 1.0;
-			S_Rest = 0.0;
+        if (tau >= 1.0 || S_Rest <= 0.0)
+        {
+            tau = 1.0;
+            S_Rest = 0.0;
 
-			// weiter gehts nicht
-			P_k->x = P1->x;
+            // weiter gehts nicht
+            P_k->x = P1->x;
             P_k->y = P1->y;
         }
         else
         {
-			P_k->x = P0->x + tau*(P1->x - P0->x);
-			P_k->y = P0->y + tau*(P1->y - P0->y);
-		}
+            P_k->x = P0->x + tau*(P1->x - P0->x);
+            P_k->y = P0->y + tau*(P1->y - P0->y);
+        }
+        
+        Verfahrvektor.x = P_k->x - old_x;
+        Verfahrvektor.y = P_k->y - old_y;
 
-		set_position(P_k);
-		for (i=0; i<10000; i++)
-			asm{ nop; };
-//		sleep(10);
+        set_position(&Verfahrvektor);
 
-		// nur jedes zehnte mal ausgeben
-		printf_counter = (printf_counter+1) % 10;
-		if (printf_counter == 0)
-		  printf("Prozent verfahren: %02f, x=%06f, y=%06f, v_k = %02f\n", tau*100, P_k->x, P_k->y, v_k);
-	  }
+        // manuell eingebaute Verzoegerung
+        for (i=0; i<10000; i++)
+            asm{ nop; };
+
+        if (!printf_counter)
+            printf("Fortschritt/%: %02f (+%02f); Verfahrvektor: (%06f|%06f); v_k = %02f;\n", tau*100, dtau*100, Verfahrvektor.x, Verfahrvektor.y, v_k);
+    }
+    
+    printf("Fortschritt/%: %02f (+%02f); Verfahrvektor: (%06f|%06f); v_k = %02f;\n", tau*100, dtau*100, Verfahrvektor.x, Verfahrvektor.y, v_k);
+    printf("Endpunkt erreicht.\n");
 }
 
+/**
+ * Interpoliert zwischen zwei gegebenen Punkten
+ * durch Aufruf der mit mode gewaehlten Interpolations-Methode
+ */
 void interpolate(point_t *P0, point_t *P1, int mode)
 {
 //    if (mode == MODE_INTERPOLATION_RAMP)
-		  interpolate_ramp(P0, P1);
+          interpolate_ramp(P0, P1);
 
-//	else
+//    else
 //        printf("Interpolations-Modus wird nicht unterstuetzt.\n");
 }
 
-/*
- * NC-Interpreter von
- * Matthias Bock und Nicole Loewel
- *
- * 25. April 2016
- *
- * Lizenz: GNU GPLv3
+/**
+ * Interpretiert genau ein Kommando aus der eingelesenen NC-Datei
+ * und fuehrt bedarfsfalls den Interpolator aus, um den Roboter zu verfahren
  */
-
 void interpret_command(char input_str[], point_t* target, bool* move)
 {
 
-	point_t P;
-	char block[30];
-	block[0] = 0;
+    point_t P;
+    char block[30];
+    block[0] = 0;
 
-//	printf("input_str = %s\n", input_str);
-//	printf("block = %s\n", block);
-	strcpy(block, input_str);
+//    printf("input_str = %s\n", input_str);
+//    printf("block = %s\n", block);
+    strcpy(block, input_str);
 
-	if (block[4] == 10 || block[4] == 13)
-	{
-		block[4] = 0;
-	}
+    if (block[4] == 10 || block[4] == 13)
+    {
+        block[4] = 0;
+    }
 
-//	block[0] = input_str[0];
-//	block[1] = input_str[1];
-//	block[2] = input_str[2];
-//	block[3] = 0;
-//	printf("input_str = %s\n", input_str);
-//	printf("block = %s\n", block);
+//    block[0] = input_str[0];
+//    block[1] = input_str[1];
+//    block[2] = input_str[2];
+//    block[3] = 0;
+//    printf("input_str = %s\n", input_str);
+//    printf("block = %s\n", block);
 
-	if (block[0] == 'N')
-	{
-		printf("Das ist ein Kommentar.\n");
-		  return;
-	}
+    if (block[0] == 'N')
+    {
+        printf("Das ist ein Kommentar.\n");
+          return;
+    }
 
     else if (block[0] == 'G')
     {
@@ -262,7 +326,7 @@ void interpret_command(char input_str[], point_t* target, bool* move)
         {
             printf("G-Kommando nicht erkannt: %s\n", block);
         }
-	 }
+     }
 
     else if (block[0] == 'X')
     {
@@ -289,9 +353,9 @@ void interpret_command(char input_str[], point_t* target, bool* move)
         block[4] = '\0';
 //        if (!strcmp(block, "M30"))
 //            printf("Ich nehme an, sie meinten \"M30\": %s\n", block);
-		P.x = 0;
-		P.y = 0;
-		set_position(&P);
+        P.x = 0;
+        P.y = 0;
+        set_position(&P);
         printf("Programmende\n");
     }
 
@@ -301,12 +365,17 @@ void interpret_command(char input_str[], point_t* target, bool* move)
     }
 }
 
+/**
+ * Interpretiert eine Zeile aus der NC-Datei,
+ * indem die Zeile in Teil-Kommandos zerlegt und
+ * jedes Kommando einzeln an interpret_command uebergeben wird
+ */
 void interpret_line(char line[])
 {
-	 point_t target;
+    point_t target;
     bool move;
-	 char* p;
-	 int i;
+    char* p;
+    int i;
 
     // leere Zeile
     if (strlen(line) < 3 || line[0] == ' ' || line[0] == '\t')
@@ -324,77 +393,86 @@ void interpret_line(char line[])
     }
 
     // dahin wollen wir in dieser Zeile verfahren:
-	 target.x = 0.0;
-	 target.y = 0.0;
+    target.x = 0.0;
+    target.y = 0.0;
 
     // sollen wir nach dieser Zeile verfahren?
     move = false;
 
     // Zeile auftrennen mit Leertaste als Zwischenraum/Trennzeichen
-	 p = strtok(line, " ");
+    p = strtok(line, " ");
 
     // jeden Teilblock verarbeiten
     while (p != NULL)
-	 {
-	   printf("Interpretiere Teil-String %s...\n", (char*)p);
-	   interpret_command(p, &target, &move);
-	   p = strtok(NULL, " ");
+    {
+       printf("Interpretiere Teil-String %s...\n", (char*)p);
+       interpret_command(p, &target, &move);
+       p = strtok(NULL, " ");
     }
 
     if (move)
     {
         // Interpolator aufrufen
-		interpolate(&current_position, &target, mode_interpolation);
-		for (i=0; i<10000; i++)
-			asm{ nop; };
-//		sleep(500);
-	 }
-	 else printf("haha, move ist false, passiert ja gar nichts hier\n");
+        interpolate(&current_position, &target, mode_interpolation);
+
+        // manuell eingebaute Verzoegerung
+        // Laesst ein bisschen Zeit zwischen dem Interpretieren der Zeilen der NC-Datei
+        for (i=0; i<10000; i++)
+            asm{ nop; };
+     }
+     else
+     {
+         printf("Stopp.\n");
+     }
 }
 
-size_t getline(char **lineptr, size_t *n, FILE *stream) {
+/**
+ * Liest genau eine Zeile aus einem Datenstrom, z.B einer Datei
+ */
+size_t getline(char **lineptr, size_t *n, FILE *stream)
+{
     char *bufptr = NULL;
     char *p = bufptr;
     size_t size;
     int c;
 
     if (lineptr == NULL) {
-    	return -1;
+        return -1;
     }
     if (stream == NULL) {
-    	return -1;
+        return -1;
     }
     if (n == NULL) {
-    	return -1;
+        return -1;
     }
     bufptr = *lineptr;
     size = *n;
 
     c = fgetc(stream);
     if (c == EOF) {
-    	return -1;
+        return -1;
     }
     if (bufptr == NULL) {
-    	bufptr = malloc(128);
-    	if (bufptr == NULL) {
-    		return -1;
-    	}
-    	size = 128;
+        bufptr = malloc(128);
+        if (bufptr == NULL) {
+            return -1;
+        }
+        size = 128;
     }
     p = bufptr;
     while(c != EOF) {
-    	if ((p - bufptr) > (size - 1)) {
-    		size = size + 128;
-    		bufptr = realloc(bufptr, size);
-    		if (bufptr == NULL) {
-    			return -1;
-    		}
-    	}
-    	*p++ = c;
-    	if (c == '\n') {
-    		break;
-    	}
-    	c = fgetc(stream);
+        if ((p - bufptr) > (size - 1)) {
+            size = size + 128;
+            bufptr = realloc(bufptr, size);
+            if (bufptr == NULL) {
+                return -1;
+            }
+        }
+        *p++ = c;
+        if (c == '\n') {
+            break;
+        }
+        c = fgetc(stream);
     }
 
     *p++ = '\0';
@@ -412,7 +490,7 @@ int main()
     size_t read;
 
     // Datei oeffnen
-	fp = fopen("Nik.nc", "r");
+    fp = fopen("Nik.nc", "r");
     if (fp == NULL)
     {
         printf("Fatal: Datei konnte nicht geoeffnet werden\n");

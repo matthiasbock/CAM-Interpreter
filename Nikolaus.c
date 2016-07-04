@@ -44,11 +44,11 @@ typedef struct
     double y;
 } point_t;
 
-#define pulses_per_10_um 400
+#define pulses_per_mm 40000.0
 
-#define v_Bahn  16.0   // Maximalgeschwindigkeit in mm/s
-#define a       20.0   // Beschleunigung in mm/s^2
-#define T       0.004  // Interpolationstakt in ms
+#define v_Bahn  2.0    // Maximalgeschwindigkeit in mm/s
+#define a       10.0   // Beschleunigung in mm/s^2
+#define T       0.004  // Interpolationstakt in s, also 4ms
 
 int debug;
 
@@ -66,7 +66,7 @@ int speed = 100;
 /**
  * Uebergibt die Teilsollwerte an den Lageregler
  */
-void set_position(point_t* P)
+void set_increment_vector(point_t* P)
 {
 //    printf("\n");
     while (*TE_GLT == 1)
@@ -77,10 +77,10 @@ void set_position(point_t* P)
 //    printf(";\n");
 
     /* Pulse fuer X-Achse */
-    *TESOWE = (int) (P->x * pulses_per_10_um);
+    *TESOWE = (int) (P->x * pulses_per_mm);
     
     /* Pulse fuer y-Achse */
-    *(TESOWE + 1) = (int) (P->y * pulses_per_10_um);
+    *(TESOWE + 1) = (int) (P->y * pulses_per_mm);
     
     /* Uebergabe ist gueltig */
     *TE_GLT = 1;
@@ -155,9 +155,12 @@ void interpolate_ramp(point_t *P0, point_t *P1)
 
     // Laenge der Rest-Strecke, ab der gebremst werden muss,
     // um am Ende mit Geschwindigkeit Null anzukommen
-    S_Brems = pow(v_Bahn,2) / (2*a);
-    printf("Verfahre mit Rampe; Beschleunigungs-/Bremsweg: %06f (%01f\045)\n", S_Brems, S_Brems/S_Gesamt);
+	S_Brems = pow(v_Bahn,2) / (2*a);
+	if(S_Gesamt != 0)
+	{
+		printf("Verfahre mit Rampe; Beschleunigungs-/Bremsweg: %.6f (%.1f\045)\n", S_Brems, S_Brems/S_Gesamt);
 
+	}
     // Startgeschwindigkeit: Null
     v_k = 0.0;
 
@@ -166,7 +169,7 @@ void interpolate_ramp(point_t *P0, point_t *P1)
 
     Verfahrvektor.x = 0;
     Verfahrvektor.y = 0;
-    printf("Fortschritt/%: %02f (+%02f); Verfahrvektor: (%06f|%06f); v_k = %02f;\n", tau*100, dtau*100, Verfahrvektor.x, Verfahrvektor.y, v_k);
+	printf("Fortschritt: %.2f (+%.2f); Verfahrvektor: (%.6f|%.6f); v_k = %.2f;\n", tau*100, dtau*100, Verfahrvektor.x, Verfahrvektor.y, v_k);
 
     // solange wir nicht am Ziel angekommen sind:
     while (S_Rest > 0.0)
@@ -187,22 +190,33 @@ void interpolate_ramp(point_t *P0, point_t *P1)
         {
             // beschleunigen
             v_k = v_k + a*T;
+            // maximale Geschwindigkeit ueberschritten
+            if (v_k > v_Bahn)
+            {
+                v_k = v_Bahn;
+            }
             if (!printf_counter)
-            printf("Bahngeschwindigkeit unterschritten => beschleunigen\n");
+                printf("Bahngeschwindigkeit unterschritten => beschleunigen\n");
         }
         else if (S_Rest <= S_Brems)
         {
             // bremsen
             v_k = v_k - a*T;
-            if (!printf_counter)
-                printf("Bremsweg unterschritten => bremsen\n");
-        }
-        else
-        {
-            v_k = v_Bahn;
-            if (!printf_counter)
-                printf("konstante Bahngeschwindigkeit\n");
-        }
+            // Mindest-Geschwindigkeit unterschritten
+            if (v_k < 0.0)
+            {
+				v_k = 0.0;
+				tau = 1.0;
+			}
+			if (!printf_counter)
+				printf("Bremsweg unterschritten => bremsen\n");
+		}
+		else
+		{
+			v_k = v_Bahn;
+			if (!printf_counter)
+				printf("konstante Bahngeschwindigkeit\n");
+		}
 
         dtau   = v_k*T/S_Gesamt;
         tau   += dtau;
@@ -233,18 +247,14 @@ void interpolate_ramp(point_t *P0, point_t *P1)
         Verfahrvektor.x = P_k->x - old_x;
         Verfahrvektor.y = P_k->y - old_y;
 
-        set_position(&Verfahrvektor);
-
-        // manuell eingebaute Verzoegerung
-        for (i=0; i<10000; i++)
-            asm{ nop; };
+        set_increment_vector(&Verfahrvektor);
 
         if (!printf_counter)
-            printf("Fortschritt/%: %02f (+%02f); Verfahrvektor: (%06f|%06f); v_k = %02f;\n", tau*100, dtau*100, Verfahrvektor.x, Verfahrvektor.y, v_k);
-    }
-    
-    printf("Fortschritt/%: %02f (+%02f); Verfahrvektor: (%06f|%06f); v_k = %02f;\n", tau*100, dtau*100, Verfahrvektor.x, Verfahrvektor.y, v_k);
-    printf("Endpunkt erreicht.\n");
+			printf("Fortschritt: %.2f (+%.2f); Verfahrvektor: (%.6f|%.6f); v_k = %.2f;\n", tau*100, dtau*100, Verfahrvektor.x, Verfahrvektor.y, v_k);
+	}
+
+	printf("Fortschritt: %.2f (+%.2f); Verfahrvektor: (%.6f|%.6f); v_k = %.2f;\n", tau*100, dtau*100, Verfahrvektor.x, Verfahrvektor.y, v_k);
+	printf("Endpunkt erreicht.\n");
 }
 
 /**
@@ -355,7 +365,7 @@ void interpret_command(char input_str[], point_t* target, bool* move)
 //            printf("Ich nehme an, sie meinten \"M30\": %s\n", block);
         P.x = 0;
         P.y = 0;
-        set_position(&P);
+		set_increment_vector(&P);
         printf("Programmende\n");
     }
 
@@ -414,11 +424,6 @@ void interpret_line(char line[])
     {
         // Interpolator aufrufen
         interpolate(&current_position, &target, mode_interpolation);
-
-        // manuell eingebaute Verzoegerung
-        // Laesst ein bisschen Zeit zwischen dem Interpretieren der Zeilen der NC-Datei
-        for (i=0; i<10000; i++)
-            asm{ nop; };
      }
      else
      {
